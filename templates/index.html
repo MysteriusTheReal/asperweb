@@ -40,7 +40,8 @@
 </head>
 <body>
 
-    <audio id="audioBip" src="/static/bip.mp3" preload="auto"></audio>
+    <audio id="audioBip" src="static/bip.mp3" preload="auto"></audio>
+    <audio id="audioVoz" preload="auto"></audio>
 
     <div id="start-overlay" onclick="iniciarSistema()">
         TOQUE PARA INICIALIZAR ASISTENTE CONTINUO
@@ -59,71 +60,77 @@
     </div>
 
     <script>
-        let voces = [];
+        // --- CONFIGURACIÓN DE SINCRONIZACIÓN ---
+        const API_URL = "https://asperweb.onrender.com"; 
+
         const statusDiv = document.getElementById('status');
         const videoOjos = document.getElementById('ojosVideo');
         const bip = document.getElementById('audioBip');
+        const audioVoz = document.getElementById('audioVoz');
 
-        const cargarVoces = () => { voces = window.speechSynthesis.getVoices(); };
-        window.speechSynthesis.onvoiceschanged = cargarVoces;
-        cargarVoces();
+        // Configuración de Reconocimiento de Voz del Navegador
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.lang = 'es-MX';
+        recognition.interimResults = false;
 
         function iniciarSistema() {
             document.getElementById('start-overlay').style.display = 'none';
             ejecutarCicloContinuo();
         }
 
-        function hablar(texto) {
-            window.speechSynthesis.cancel();
-            const msg = new SpeechSynthesisUtterance(texto);
+        async function ejecutarCicloContinuo() {
+            bip.play().catch(e => console.log("Error de audio:", e));
+            statusDiv.innerHTML = "<span class='user-text'>[ ESCUCHANDO... ]</span>";
             
-            let mejorVoz = voces.find(v => v.name.includes('Natural') && v.lang.includes('es')) ||
-                           voces.find(v => v.lang.includes('es'));
-            
-            if (mejorVoz) msg.voice = mejorVoz;
-            msg.lang = 'es-MX';
-
-            msg.onstart = () => videoOjos.play();
-            
-            msg.onend = () => {
-                videoOjos.pause();
-                videoOjos.currentTime = 0;
-                // Esperar un momento antes de volver a activar el micro
-                setTimeout(ejecutarCicloContinuo, 800);
-            };
-
-            window.speechSynthesis.speak(msg);
+            try {
+                recognition.start();
+            } catch (e) {
+                console.log("Reconocimiento ya activo");
+            }
         }
 
-        async function ejecutarCicloContinuo() {
-            // 1. Sonar el BIP antes de llamar a Python (indica que empieza a escuchar)
-            bip.play().catch(e => console.log("Error de audio:", e));
-            
-            statusDiv.innerHTML = "<span class='user-text'>[ ESCUCHANDO... ]</span>";
+        recognition.onresult = async (event) => {
+            const textoVoz = event.results[0][0].transcript;
+            statusDiv.innerHTML = `<div class="user-text">Procesando: "${textoVoz}"</div>`;
 
             try {
-                const r = await fetch('/procesar_voz');
-                const data = await r.json();
-
-                // Si no hay detección clara, reiniciamos el ciclo rápido
-                if (!data.pregunta || data.pregunta === "...") {
-                    setTimeout(ejecutarCicloContinuo, 200);
-                    return;
-                }
+                // 1. Enviar texto a Render
+                const res = await fetch(`${API_URL}/chat`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ texto: textoVoz })
+                });
+                const data = await res.json();
 
                 statusDiv.innerHTML = `
-                    <div class="user-text">Interrogante: "${data.pregunta}"</div>
+                    <div class="user-text">TÚ: "${textoVoz}"</div>
                     <div class="bot-text">${data.respuesta}</div>
                 `;
 
-                hablar(data.respuesta);
+                // 2. Obtener y reproducir voz de Edge-TTS desde Render
+                audioVoz.src = `${API_URL}/tts?texto=${encodeURIComponent(data.respuesta)}`;
+                
+                audioVoz.onplay = () => videoOjos.play();
+                audioVoz.onended = () => {
+                    videoOjos.pause();
+                    videoOjos.currentTime = 0;
+                    setTimeout(ejecutarCicloContinuo, 500);
+                };
+                
+                audioVoz.play();
 
             } catch (e) {
-                console.error("Fallo de red:", e);
-                setTimeout(ejecutarCicloContinuo, 2000);
+                console.error("Error de conexión:", e);
+                statusDiv.innerHTML = "<span class='bot-text'>ERROR DE CONEXIÓN</span>";
+                setTimeout(ejecutarCicloContinuo, 3000);
             }
-        }
+        };
+
+        recognition.onerror = (event) => {
+            console.log("Error de micro:", event.error);
+            setTimeout(ejecutarCicloContinuo, 1000);
+        };
+
     </script>
 </body>
 </html>
-
