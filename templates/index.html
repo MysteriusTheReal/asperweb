@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Asper-Bot OS - Cara del Robot</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            overflow: hidden; color: white; font-family: 'Segoe UI', sans-serif;
+        }
+
+        #video-container { width: 90vh; height: 90vh; display: flex; justify-content: center; align-items: center; }
+        video { width: 100%; height: 100%; object-fit: contain; }
+
+        #status-container {
+            position: absolute; bottom: 8%; width: 80%; max-width: 700px; z-index: 10;
+        }
+
+        #status {
+            background: rgba(0, 0, 0, 0.75);
+            border: 1px solid rgba(0, 212, 255, 0.4);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            min-height: 50px;
+        }
+
+        .user-text { color: #888; font-size: 0.8rem; margin-bottom: 5px; text-transform: uppercase; }
+        .bot-text { color: #00d4ff; font-size: 1.3rem; font-weight: 300; }
+
+        #start-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 100; 
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer; font-size: 1.2rem; letter-spacing: 2px;
+        }
+    </style>
+</head>
+<body>
+
+    <audio id="audioBip" src="/static/bip.mp3" preload="auto"></audio>
+
+    <div id="start-overlay" onclick="iniciarSistema()">
+        TOQUE PARA INICIALIZAR ASISTENTE CONTINUO
+    </div>
+
+    <div id="video-container">
+        <video id="ojosVideo" muted loop>
+            <source src="/static/ojosvideo.mp4" type="video/mp4">
+        </video>
+    </div>
+
+    <div id="status-container">
+        <div id="status">
+            <span class="bot-text">SISTEMA EN REPOSO</span>
+        </div>
+    </div>
+
+    <script>
+        let voces = [];
+        const statusDiv = document.getElementById('status');
+        const videoOjos = document.getElementById('ojosVideo');
+        const bip = document.getElementById('audioBip');
+
+        const cargarVoces = () => { voces = window.speechSynthesis.getVoices(); };
+        window.speechSynthesis.onvoiceschanged = cargarVoces;
+        cargarVoces();
+
+        function iniciarSistema() {
+            document.getElementById('start-overlay').style.display = 'none';
+            ejecutarCicloContinuo();
+        }
+
+        function hablar(texto) {
+            window.speechSynthesis.cancel();
+            const msg = new SpeechSynthesisUtterance(texto);
+            
+            let mejorVoz = voces.find(v => v.name.includes('Natural') && v.lang.includes('es')) ||
+                           voces.find(v => v.lang.includes('es'));
+            
+            if (mejorVoz) msg.voice = mejorVoz;
+            msg.lang = 'es-MX';
+
+            msg.onstart = () => videoOjos.play();
+            
+            msg.onend = () => {
+                videoOjos.pause();
+                videoOjos.currentTime = 0;
+                // Esperar un momento antes de volver a activar el micro
+                setTimeout(ejecutarCicloContinuo, 800);
+            };
+
+            window.speechSynthesis.speak(msg);
+        }
+
+        async function ejecutarCicloContinuo() {
+            // 1. Sonar el BIP antes de llamar a Python (indica que empieza a escuchar)
+            bip.play().catch(e => console.log("Error de audio:", e));
+            
+            statusDiv.innerHTML = "<span class='user-text'>[ ESCUCHANDO... ]</span>";
+
+            try {
+                const r = await fetch('/procesar_voz');
+                const data = await r.json();
+
+                // Si no hay detección clara, reiniciamos el ciclo rápido
+                if (!data.pregunta || data.pregunta === "...") {
+                    setTimeout(ejecutarCicloContinuo, 200);
+                    return;
+                }
+
+                statusDiv.innerHTML = `
+                    <div class="user-text">Interrogante: "${data.pregunta}"</div>
+                    <div class="bot-text">${data.respuesta}</div>
+                `;
+
+                hablar(data.respuesta);
+
+            } catch (e) {
+                console.error("Fallo de red:", e);
+                setTimeout(ejecutarCicloContinuo, 2000);
+            }
+        }
+    </script>
+</body>
+</html>
